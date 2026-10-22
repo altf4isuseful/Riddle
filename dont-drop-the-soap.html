@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Don't Drop the Soap</title>
+<style>
+  :root { --bg: #1b1d22; --wall: #2a2d35; --accent: #ffcf3f; --text: #e9e9ef; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Courier New", monospace; overflow: hidden; touch-action: none; }
+  #wrap { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 100%; padding: 8px; }
+  h1 { margin: 0; font-size: clamp(22px, 5vw, 40px); letter-spacing: 3px; color: var(--accent);
+    text-shadow: 3px 3px 0 #000; text-align: center; }
+  .sub { margin: 6px 0 10px; max-width: 640px; font-size: clamp(10px, 2.2vw, 13px);
+    line-height: 1.4; text-align: center; color: #b8b8c4; font-style: italic; }
+  canvas { background: var(--wall); border: 4px solid #000; border-radius: 6px;
+    max-width: 100%; max-height: 62vh; cursor: none; }
+  #hud { margin-top: 8px; font-size: 14px; display: flex; gap: 22px; }
+  #hud span b { color: var(--accent); }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.72);
+    text-align: center; padding: 20px; }
+  #overlay.hidden { display: none; }
+  #overlay h2 { margin: 0 0 8px; font-size: clamp(24px, 6vw, 44px); color: var(--accent); }
+  #overlay p { margin: 4px 0; max-width: 440px; font-size: 15px; }
+  button { margin-top: 16px; padding: 12px 28px; font-family: inherit; font-size: 18px;
+    font-weight: bold; background: var(--accent); color: #000; border: 3px solid #000;
+    border-radius: 6px; cursor: pointer; box-shadow: 4px 4px 0 #000; }
+  button:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 #000; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>DON'T DROP THE SOAP</h1>
+  <div class="sub">
+    I have 418 lines, maybe a mouthful. The viewer of code, may be helpful.
+    Observance and inspecting could work, but the code inside project behind
+    this is best and vital, unlike a man who they call Kirk.
+  </div>
+  <canvas id="c" width="640" height="420"></canvas>
+  <div id="hud">
+    <span>Time: <b id="time">0.0</b>s</span>
+    <span>Best: <b id="best">0.0</b>s</span>
+    <span>Slick: <b id="slick">1</b></span>
+  </div>
+</div>
+<div id="overlay">
+  <h2 id="ovTitle">SHOWER TIME</h2>
+  <p id="ovText">Keep the slippery soap balanced on your hand. Move with the mouse,
+    finger, or the arrow keys / A and D. Catch it near the middle of your palm
+    for control. The longer you last, the slicker it gets.</p>
+  <button id="startBtn">START</button>
+</div>
+<script>
+(function () {
+  "use strict";
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d");
+  var W = canvas.width;
+  var H = canvas.height;
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovText = document.getElementById("ovText");
+  var startBtn = document.getElementById("startBtn");
+  var timeEl = document.getElementById("time");
+  var bestEl = document.getElementById("best");
+  var slickEl = document.getElementById("slick");
+  var GRAVITY = 900;
+  var HAND_Y = H - 70;
+  var HAND_W = 120;
+  var HAND_H = 16;
+  var state = "menu";
+  var best = 0;
+  var elapsed = 0;
+  var lastT = 0;
+  var raf = 0;
+  try { best = parseFloat(localStorage.getItem("soapBest")) || 0; } catch (e) { best = 0; }
+  bestEl.textContent = best.toFixed(1);
+  var hand = { x: W / 2, prevX: W / 2, vx: 0, targetX: W / 2 };
+  var soap = { x: W / 2, y: 120, vx: 0, vy: 0, w: 46, h: 26, rot: 0, spin: 0 };
+  var bubbles = [];
+  var drips = [];
+  var splats = [];
+  var gusts = [];
+  var messages = [];
+  var shake = 0;
+  var nextGust = 4;
+  var nextDrip = 0;
+  var bounces = 0;
+  var keys = { left: false, right: false };
+  var dropLines = [
+    "SPLAT! The soap has escaped.", "Butterfingers. It slid away.",
+    "That bar had other plans.", "Slippery little devil, wasn't it?",
+    "The soap wins this round.", "You blinked. The soap did not.",
+    "Gravity: 1. You: 0."
+  ];
+  var cheerLines = [
+    "Nice grip!", "Smooth hands!", "Steady...", "Clean catch!",
+    "Soap whisperer!", "Still holding!"
+  ];
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function say(text, x, y) {
+    messages.push({ text: text, x: x, y: y, life: 1.1 });
+  }
+  function setTarget(clientX) {
+    var rect = canvas.getBoundingClientRect();
+    hand.targetX = (clientX - rect.left) * (W / rect.width);
+  }
+  function setKey(e, down) {
+    if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") { keys.left = down; }
+    if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") { keys.right = down; }
+  }
+  canvas.addEventListener("mousemove", function (e) { setTarget(e.clientX); });
+  function touch(e) { setTarget(e.touches[0].clientX); e.preventDefault(); }
+  canvas.addEventListener("touchstart", touch, { passive: false });
+  canvas.addEventListener("touchmove", touch, { passive: false });
+  window.addEventListener("keydown", function (e) {
+    setKey(e, true);
+    if ((e.key === " " || e.key === "Enter") && state !== "playing") {
+      e.preventDefault();
+      startGame();
+    }
+  });
+  window.addEventListener("keyup", function (e) { setKey(e, false); });
+  startBtn.addEventListener("click", function () {
+    startBtn.blur();
+    startGame();
+  });
+  function startGame() {
+    cancelAnimationFrame(raf);
+    state = "playing";
+    overlay.classList.add("hidden");
+    elapsed = 0;
+    bounces = 0;
+    shake = 0;
+    nextGust = 4;
+    bubbles = [];
+    drips = [];
+    splats = [];
+    gusts = [];
+    messages = [];
+    hand.x = hand.prevX = hand.targetX = W / 2;
+    hand.vx = 0;
+    soap.x = W / 2 + (Math.random() * 60 - 30);
+    soap.y = 80;
+    soap.vx = Math.random() * 80 - 40;
+    soap.vy = 0;
+    soap.rot = 0;
+    soap.spin = Math.random() * 2 - 1;
+    lastT = performance.now();
+    raf = requestAnimationFrame(loop);
+  }
+  function endGame() {
+    state = "over";
+    shake = 14;
+    for (var i = 0; i < 26; i++) {
+      splats.push({
+        x: soap.x, y: HAND_Y + 40,
+        vx: Math.random() * 360 - 180, vy: -Math.random() * 260,
+        r: 2 + Math.random() * 5, life: 1
+      });
+    }
+    var newBest = elapsed > best;
+    if (newBest) {
+      best = elapsed;
+      try { localStorage.setItem("soapBest", String(best)); } catch (e) {}
+    }
+    bestEl.textContent = best.toFixed(1);
+    setTimeout(function () {
+      if (state !== "over") { return; }
+      ovTitle.textContent = pick(dropLines);
+      ovText.textContent = "You lasted " + elapsed.toFixed(1) + " seconds with " +
+        bounces + " catches." + (newBest ? " New personal best!" : "");
+      startBtn.textContent = "TRY AGAIN";
+      overlay.classList.remove("hidden");
+    }, 900);
+  }
+  function slickness() { return 1 + Math.floor(elapsed / 8); }
+  function frictionFactor() { return Math.max(0.2, 1 - elapsed * 0.012); } // lower = slipperier
+  function updateHand(dt) {
+    if (keys.left) { hand.targetX -= 520 * dt; }
+    if (keys.right) { hand.targetX += 520 * dt; }
+    hand.targetX = Math.max(HAND_W / 2, Math.min(W - HAND_W / 2, hand.targetX));
+    hand.prevX = hand.x;
+    hand.x += (hand.targetX - hand.x) * Math.min(1, dt * 14);
+    hand.vx = (hand.x - hand.prevX) / Math.max(dt, 0.001);
+  }
+  function updateGusts(dt) {
+    nextGust -= dt;
+    if (nextGust <= 0) {
+      var dir = Math.random() < 0.5 ? -1 : 1;
+      gusts.push({
+        dir: dir, x: dir > 0 ? -40 : W + 40, y: 60 + Math.random() * 180,
+        life: 1.4, power: 140 + elapsed * 4
+      });
+      say(dir > 0 ? "Steam blast ->" : "<- Steam blast", W / 2, 40);
+      nextGust = Math.max(1.6, 5 - elapsed * 0.05) + Math.random() * 2;
+    }
+    for (var i = gusts.length - 1; i >= 0; i--) {
+      var g = gusts[i];
+      g.life -= dt;
+      g.x += g.dir * 520 * dt;
+      if (Math.abs(soap.x - g.x) < 70 && Math.abs(soap.y - g.y) < 70) {
+        soap.vx += g.dir * g.power * dt * 4;
+        soap.spin += g.dir * dt * 6;
+      }
+      if (g.life <= 0) { gusts.splice(i, 1); }
+    }
+  }
+  function updateSoap(dt) {
+    soap.vy += GRAVITY * dt;
+    soap.x += soap.vx * dt;
+    soap.y += soap.vy * dt;
+    soap.rot += soap.spin * dt;
+    soap.vx += (Math.random() - 0.5) * 300 * slickness() * dt; // slippery wobble
+    if (soap.x < soap.w / 2) { soap.x = soap.w / 2; soap.vx = Math.abs(soap.vx) * 0.6; }
+    if (soap.x > W - soap.w / 2) { soap.x = W - soap.w / 2; soap.vx = -Math.abs(soap.vx) * 0.6; }
+    if (soap.y < soap.h / 2) { soap.y = soap.h / 2; soap.vy = Math.abs(soap.vy) * 0.5; }
+    var top = HAND_Y - HAND_H / 2;
+    var overlapX = Math.abs(soap.x - hand.x) < HAND_W / 2 + soap.w / 3;
+    if (soap.vy > 0 && overlapX && soap.y + soap.h / 2 >= top && soap.y < HAND_Y + 12) {
+      var offset = (soap.x - hand.x) / (HAND_W / 2);
+      var grip = frictionFactor();
+      soap.y = top - soap.h / 2;
+      soap.vy = Math.min(-190, -Math.abs(soap.vy) * 0.62);
+      soap.vx = soap.vx * (1 - 0.5 * grip) + hand.vx * 0.35 + offset * 260 * (1.1 - grip * 0.4);
+      soap.spin = offset * 4 + hand.vx * 0.004;
+      bounces++;
+      shake = 3;
+      for (var i = 0; i < 5; i++) {
+        bubbles.push({
+          x: soap.x, y: top, vx: Math.random() * 120 - 60,
+          vy: -Math.random() * 120 - 20, r: 3 + Math.random() * 5, life: 1.2
+        });
+      }
+      if (bounces % 6 === 0) { say(pick(cheerLines), soap.x, soap.y - 30); }
+    }
+    if (soap.y - soap.h / 2 > H - 20) { endGame(); }
+  }
+  function updateParticles(dt) {
+    var i;
+    nextDrip -= dt;
+    if (nextDrip <= 0 && state === "playing") {
+      drips.push({ x: Math.random() * W, y: -10, vy: 200 + Math.random() * 240,
+        len: 8 + Math.random() * 14 });
+      nextDrip = 0.04;
+    }
+    for (i = drips.length - 1; i >= 0; i--) {
+      drips[i].y += drips[i].vy * dt;
+      if (drips[i].y > H + 20) { drips.splice(i, 1); }
+    }
+    for (i = bubbles.length - 1; i >= 0; i--) {
+      var b = bubbles[i];
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.vy -= 40 * dt;
+      b.life -= dt;
+      if (b.life <= 0) { bubbles.splice(i, 1); }
+    }
+    for (i = splats.length - 1; i >= 0; i--) {
+      var s = splats[i];
+      s.vy += GRAVITY * dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.life -= dt;
+      if (s.life <= 0) { splats.splice(i, 1); }
+    }
+    for (i = messages.length - 1; i >= 0; i--) {
+      messages[i].life -= dt;
+      messages[i].y -= 18 * dt;
+      if (messages[i].life <= 0) { messages.splice(i, 1); }
+    }
+    if (shake > 0) { shake = Math.max(0, shake - 30 * dt); }
+  }
+  function line(x1, y1, x2, y2) {
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+  function drawBackground() {
+    var x, y;
+    ctx.fillStyle = "#2a2d35";
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "rgba(255,255,255,0.05)";
+    ctx.lineWidth = 1;
+    for (x = 0; x < W; x += 40) { line(x, 0, x, H); }
+    for (y = 0; y < H; y += 40) { line(0, y, W, y); }
+    ctx.fillStyle = "#8a8f9c";
+    ctx.fillRect(W / 2 - 60, 0, 120, 12);
+    ctx.fillStyle = "#6a6f7c";
+    ctx.fillRect(W / 2 - 12, 0, 24, 26);
+    ctx.fillStyle = "#1f2127";
+    ctx.fillRect(0, H - 20, W, 20);
+    ctx.fillStyle = "#15171b";
+    ctx.fillRect(W / 2 - 40, H - 16, 80, 8);
+  }
+  function drawDrips() {
+    ctx.strokeStyle = "rgba(150, 200, 255, 0.35)";
+    ctx.lineWidth = 2;
+    for (var i = 0; i < drips.length; i++) {
+      line(drips[i].x, drips[i].y, drips[i].x, drips[i].y + drips[i].len);
+    }
+  }
+  function drawGusts() {
+    ctx.lineWidth = 3;
+    for (var i = 0; i < gusts.length; i++) {
+      var g = gusts[i];
+      ctx.strokeStyle = "rgba(255,255,255," + Math.min(0.5, g.life * 0.4) + ")";
+      for (var k = 0; k < 3; k++) { line(g.x - g.dir * 50, g.y + k * 12, g.x, g.y + k * 12); }
+    }
+  }
+  function drawHand() {
+    var x = hand.x;
+    var y = HAND_Y;
+    ctx.fillStyle = "#e0a67a";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 3;
+    ctx.fillRect(x - HAND_W / 2, y - HAND_H / 2, HAND_W, HAND_H);
+    ctx.strokeRect(x - HAND_W / 2, y - HAND_H / 2, HAND_W, HAND_H);
+    for (var i = 0; i < 4; i++) {
+      var fx = x - HAND_W / 2 + 8 + i * 28;
+      ctx.fillRect(fx, y - HAND_H / 2 - 10, 18, 12);
+      ctx.strokeRect(fx, y - HAND_H / 2 - 10, 18, 12);
+    }
+    ctx.fillStyle = "#ff8a1f";
+    ctx.fillRect(x - 24, y + HAND_H / 2, 48, H - y);
+    ctx.strokeRect(x - 24, y + HAND_H / 2, 48, H - y);
+  }
+  function drawSoap() {
+    var w = soap.w;
+    var h = soap.h;
+    var r = 8;
+    ctx.save();
+    ctx.translate(soap.x, soap.y);
+    ctx.rotate(soap.rot);
+    ctx.fillStyle = "#9be7ff";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-w / 2 + r, -h / 2);
+    ctx.arcTo(w / 2, -h / 2, w / 2, h / 2, r);
+    ctx.arcTo(w / 2, h / 2, -w / 2, h / 2, r);
+    ctx.arcTo(-w / 2, h / 2, -w / 2, -h / 2, r);
+    ctx.arcTo(-w / 2, -h / 2, w / 2, -h / 2, r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.beginPath();
+    ctx.ellipse(-w / 4, -h / 5, 7, 3, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  function drawBubbles() {
+    var i;
+    ctx.lineWidth = 1.5;
+    ctx.fillStyle = "rgba(180,230,255,0.25)";
+    for (i = 0; i < bubbles.length; i++) {
+      ctx.strokeStyle = "rgba(255,255,255," + Math.min(1, bubbles[i].life) + ")";
+      ctx.beginPath();
+      ctx.arc(bubbles[i].x, bubbles[i].y, bubbles[i].r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    for (i = 0; i < splats.length; i++) {
+      ctx.fillStyle = "rgba(155,231,255," + Math.max(0, splats[i].life) + ")";
+      ctx.beginPath();
+      ctx.arc(splats[i].x, splats[i].y, splats[i].r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  function drawMessages() {
+    ctx.textAlign = "center";
+    ctx.font = "bold 16px 'Courier New', monospace";
+    for (var i = 0; i < messages.length; i++) {
+      var m = messages[i];
+      ctx.globalAlpha = Math.max(0, Math.min(1, m.life));
+      ctx.fillStyle = "#000";
+      ctx.fillText(m.text, m.x + 2, m.y + 2);
+      ctx.fillStyle = "#ffcf3f";
+      ctx.fillText(m.text, m.x, m.y);
+    }
+    ctx.globalAlpha = 1;
+  }
+  function draw() {
+    ctx.save();
+    if (shake > 0) { ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake); }
+    drawBackground();
+    drawDrips();
+    drawGusts();
+    if (state !== "over") { drawSoap(); }
+    drawHand();
+    drawBubbles();
+    drawMessages();
+    ctx.restore();
+  }
+  function loop(now) {
+    var dt = Math.min(0.033, (now - lastT) / 1000);
+    lastT = now;
+    if (state === "playing") {
+      elapsed += dt;
+      updateHand(dt);
+      updateGusts(dt);
+      updateSoap(dt);
+      timeEl.textContent = elapsed.toFixed(1);
+      slickEl.textContent = String(slickness());
+    }
+    updateParticles(dt);
+    draw();
+    raf = requestAnimationFrame(loop);
+  }
+  draw(); // idle preview behind the start screen
+})();
+</script>
+<input type="text" id="nameBox" value="PUT NAME HERE" hidden></body></html>
